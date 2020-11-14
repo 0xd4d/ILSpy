@@ -68,26 +68,42 @@ namespace ICSharpCode.Decompiler.ILAst {
 
 			// C#
 
+			int pos = body.Count - 2;
 			ILVariable stateMachineVar, builderVar;
-			if (!MatchStartCall(body[body.Count - 2], out stateMachineVar, out builderVar) || builderVar == null)
+			if (MatchStartCall(body[pos], out stateMachineVar, out builderVar) && builderVar != null) {
+				ILExpression loadBuilderExpr;
+				if (!body[pos - 1].MatchStloc(builderVar, out loadBuilderExpr))
+					return false;
+				if (!MatchBuilderField(stateMachineVar, loadBuilderExpr))
+					return false;
+			}
+			else if (MatchStartCall(body[pos], out stateMachineVar)) {
+				IMethod startMethod;
+				ILExpression loadStartTarget, loadStartArgument;
+				if (!body[pos++].Match(ILCode.Call, out startMethod, out loadStartTarget, out loadStartArgument))
+					return false;
+				if (!MatchBuilderField(stateMachineVar, loadStartTarget))
+					return false;
+			}
+			else
 				return false;
-			if (!MatchBuilderField(body[body.Count - 3], stateMachineVar, builderVar))
-				return false;
+
+
 			if (!MatchReturnTask(body[body.Count - 1], stateMachineVar))
 				return false;
 
 			// Check the last field assignment - this should be the state field
 			ILExpression initialStateExpr;
-			if (!MatchStFld(body[body.Count - 4], stateMachineVar, stateMachineTypeIsValueType, out stateField, out initialStateExpr))
+			if (!MatchStFld(body[pos - 2], stateMachineVar, stateMachineTypeIsValueType, out stateField, out initialStateExpr))
 				return false;
 			if (!initialStateExpr.Match(ILCode.Ldc_I4, out initialState))
 				return false;
 			if (initialState != -1)
 				return false;
 
-			if (!MatchCallCreate(body[body.Count - 5], stateMachineVar))
+			if (!MatchCallCreate(body[pos - 3], stateMachineVar))
 				return false;
-			if (!InitializeFieldToParameterMap(body, body.Count - 5, stateMachineVar))
+			if (!InitializeFieldToParameterMap(body, pos - 3, stateMachineVar))
 				return false;
 
 			return true;
@@ -135,14 +151,18 @@ namespace ICSharpCode.Decompiler.ILAst {
 		}
 		static readonly UTF8String nameCtor = new UTF8String(".ctor");
 
-		bool MatchBuilderField(ILNode expr, ILVariable stateMachineVar, ILVariable builderVar) {
-			ILExpression loadBuilderExpr;
-			if (!expr.MatchStloc(builderVar, out loadBuilderExpr))
-				return false;
+		bool MatchBuilderField(ILVariable stateMachineVar, ILExpression loadBuilderExpr) {
 			IField builderFieldRef;
 			ILExpression loadStateMachineForBuilderExpr;
-			if (!loadBuilderExpr.Match(ILCode.Ldfld, out builderFieldRef, out loadStateMachineForBuilderExpr))
+			if (loadBuilderExpr.Match(ILCode.Ldfld, out builderFieldRef, out loadStateMachineForBuilderExpr)) {
+				// OK, calling Start on copy of stateMachine.<>t__builder
+			}
+			else if (loadBuilderExpr.Match(ILCode.Ldflda, out builderFieldRef, out loadStateMachineForBuilderExpr)) {
+				// OK, Roslyn 3.6 started directly calling Start without making a copy
+			}
+			else {
 				return false;
+			}
 			if (!(loadStateMachineForBuilderExpr.MatchLdloca(stateMachineVar) || loadStateMachineForBuilderExpr.MatchLdloc(stateMachineVar)))
 				return false;
 			builderField = builderFieldRef.ResolveFieldWithinSameModule();
